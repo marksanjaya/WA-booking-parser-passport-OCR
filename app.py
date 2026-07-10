@@ -128,6 +128,7 @@ TRIP_DETAIL_LABELS = {
     "name": "name",
     "phone": "phone",
     "email": "email",
+    "number of guest": "guest",
     "guest": "guest",
     "classe": "cabin_class",
     "class": "cabin_class",
