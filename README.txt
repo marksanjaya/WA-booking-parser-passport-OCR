@@ -77,5 +77,3 @@ CATATAN PENTING
   baris kode di bawah kalau ada) kefoto jelas.
 - Kalau baris teks WA gagal ke-parse (format baru), tool bakal nunjukkin
   daftar baris yang gagal biar bisa dicek manual, bukan ditebak asal.
-- Kalau nemu format baru yang gagal kebaca (teks atau OCR), kirim contohnya
-  ke Claude buat ditambahin pattern-nya.
