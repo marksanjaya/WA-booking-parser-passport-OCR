@@ -119,6 +119,40 @@ PASSENGER_LABELS = {
     "date of birth": "dob",
 }
 
+# Format baru: "Trip Detail" -- Trip / Departure date / Name / Phone / Email /
+# Guest / Classe / Pick up point
+TRIP_DETAIL_LABELS = {
+    "departure date": "departure_date",
+    "pick up point": "pickup",
+    "trip": "trip",
+    "name": "name",
+    "phone": "phone",
+    "email": "email",
+    "guest": "guest",
+    "classe": "cabin_class",
+    "class": "cabin_class",
+}
+
+
+def parse_trip_detail_block(text: str) -> dict:
+    lines = text.splitlines()
+    data = {}
+    i = 0
+    while i < len(lines):
+        line = strip_wa_prefix(lines[i].strip())
+        for label, key in TRIP_DETAIL_LABELS.items():
+            if line.lower().startswith(label):
+                value = line.split(":", 1)[1].strip() if ":" in line else ""
+                if not value and i + 1 < len(lines):
+                    nxt = strip_wa_prefix(lines[i + 1].strip())
+                    if nxt and not any(nxt.lower().startswith(l) for l in TRIP_DETAIL_LABELS):
+                        value = nxt
+                        i += 1
+                data[key] = value
+                break
+        i += 1
+    return data
+
 
 def classify_cabin(raw: str) -> str:
     r = raw.lower()
@@ -500,6 +534,11 @@ def parse_mrz(line1: str, line2: str) -> dict:
 
 def detect_format(text: str) -> str:
     lower = text.lower()
+
+    if re.search(r"^trip\s*:", text, re.IGNORECASE | re.MULTILINE) and \
+            re.search(r"^departure date\s*:", text, re.IGNORECASE | re.MULTILINE):
+        return "trip_detail"
+
     if "passenger" in lower and "full name" in lower:
         return "passenger"
 
@@ -587,6 +626,36 @@ if st.button("Parse", type="primary"):
 
             st.subheader("Notes (siap copy)")
             st.text_area("Notes", value="\n".join(notes_lines), height=140)
+
+        elif fmt == "trip_detail":
+            st.success("Format terdeteksi: **Trip Detail**")
+            data = parse_trip_detail_block(raw_text)
+
+            st.subheader("Customer")
+            st.text_input("Nama", value=data.get("name", "-"), disabled=True)
+
+            st.subheader("Trip Details")
+            c1, c2 = st.columns(2)
+            c1.text_input("Trip", value=data.get("trip", "-"), disabled=True)
+            c2.text_input("Departure Date", value=data.get("departure_date", "-"), disabled=True)
+            c3, c4 = st.columns(2)
+            c3.text_input("Guest", value=data.get("guest", "-"), disabled=True)
+            c4.text_input("Classe / Cabin", value=classify_cabin(data.get("cabin_class", "")) if data.get("cabin_class") else "-", disabled=True)
+
+            st.subheader("Booking Info")
+            c5, c6 = st.columns(2)
+            c5.text_input("Phone", value=data.get("phone", "-"), disabled=True)
+            c6.text_input("Email", value=data.get("email", "-"), disabled=True)
+            st.text_input("Pick up point", value=data.get("pickup", "-"), disabled=True)
+
+            notes_val = (
+                f"Trip: {data.get('trip','-')} | Departure: {data.get('departure_date','-')} | "
+                f"Guest: {data.get('guest','-')} | Class: {data.get('cabin_class','-')} | "
+                f"Phone: {data.get('phone','-')} | Email: {data.get('email','-')} | "
+                f"Pick up: {data.get('pickup','-')}"
+            )
+            st.subheader("Notes (siap copy)")
+            st.text_area("Notes", value=notes_val, height=100)
 
         elif fmt == "short":
             st.success("Format terdeteksi: **Baris ringkas**")
