@@ -679,16 +679,22 @@ st.caption(
     "selalu cek manual ke foto)."
 )
 
-upload_tab, camera_tab = st.tabs(["Upload dari galeri", "Foto langsung (kamera)"])
+upload_mode = st.radio(
+    "Cara upload",
+    ["Upload dari galeri", "Foto langsung (kamera)"],
+    horizontal=True,
+)
 
-with upload_tab:
+uploaded_files = None
+camera_photo = None
+
+if upload_mode == "Upload dari galeri":
     uploaded_files = st.file_uploader(
         "Foto halaman passport",
         type=["png", "jpg", "jpeg"],
         accept_multiple_files=True,
     )
-
-with camera_tab:
+else:
     camera_photo = st.camera_input("Jepret foto passport")
 
 passport_imgs = list(uploaded_files) if uploaded_files else []
