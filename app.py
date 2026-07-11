@@ -542,6 +542,18 @@ def find_nationality_anchor(line2: str):
     return None
 
 
+def is_noise_token(t: str) -> bool:
+    """Token hasil misread padding '<' biasanya didominasi 1 huruf yang
+    diulang-ulang (misal 'CCECCECECCE', 'KRKKKKK'). Nama asli jarang
+    sepola itu. Token pendek (<3 char, misal inisial 'P') dibiarin,
+    risiko kehapus nama asli lebih besar daripada manfaat filternya."""
+    if len(t) < 3:
+        return False
+    from collections import Counter
+    most_common_count = Counter(t).most_common(1)[0][1]
+    return most_common_count / len(t) > 0.5
+
+
 def parse_mrz(line1: str, line2: str) -> dict:
     line1 = (line1 + "<" * 44)[:44]
     line2 = (line2 + "<" * 44)[:44]
@@ -549,7 +561,10 @@ def parse_mrz(line1: str, line2: str) -> dict:
     country = line1[2:5].replace("<", "")
 
     name_field = line1[5:44]
-    name_tokens = [t for t in re.split(r"<+", name_field) if t and not t.isdigit()]
+    name_tokens = [
+        t for t in re.split(r"<+", name_field)
+        if t and not t.isdigit() and not is_noise_token(t)
+    ]
 
     # coba posisi standar dulu (paling umum, kasus normal)
     nat_pos = 10
