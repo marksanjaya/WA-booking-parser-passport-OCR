@@ -765,6 +765,16 @@ if passport_imgs:
             ocr_text = pytesseract.image_to_string(processed)
             mrz_lines = find_mrz_lines(ocr_text)
 
+            if not mrz_lines:
+                # foto yang rame (2 halaman kefoto, banyak elemen visual)
+                # kadang bikin Tesseract ga nangkep MRZ sama sekali di mode
+                # default -- coba mode "anggap 1 blok teks seragam"
+                ocr_text_psm6 = pytesseract.image_to_string(processed, config="--psm 6")
+                mrz_lines_psm6 = find_mrz_lines(ocr_text_psm6)
+                if mrz_lines_psm6:
+                    ocr_text = ocr_text_psm6
+                    mrz_lines = mrz_lines_psm6
+
             if mrz_lines:
                 result = parse_mrz(*mrz_lines)
                 name_display = " ".join(result["name_tokens_raw"])
