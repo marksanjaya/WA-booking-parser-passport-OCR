@@ -427,6 +427,14 @@ def preprocess_for_ocr(image: Image.Image) -> Image.Image:
 
 MRZ_CHAR_FIX = {"€": "E", "§": "S", "«": "<", "»": "<", "‹": "<", "›": "<"}
 DIGIT_TO_LETTER = {"0": "O", "1": "I", "5": "S", "8": "B", "6": "G", "2": "Z"}
+LETTER_TO_DIGIT = {"O": "0", "Q": "0", "I": "1", "L": "1", "S": "5", "B": "8", "Z": "2", "G": "6"}
+
+
+def force_numeric(s: str) -> str:
+    """Field MRZ tertentu (tanggal, check digit) HARUS angka semua sesuai
+    spec. Kalau ada huruf nyempil di situ, itu pasti salah baca OCR, bukan
+    isi yang ambigu -- jadi aman dikoreksi otomatis."""
+    return "".join(LETTER_TO_DIGIT.get(c, c) for c in s)
 
 
 def _mrz_char_value(c: str) -> int:
@@ -467,6 +475,33 @@ def find_mrz_lines(ocr_text: str):
     return line1, candidates[idx + 1]
 
 
+# Kode negara (ISO 3166-1 alpha-3) buat deteksi ulang posisi field kalau
+# OCR ngedrop karakter (misal padding '<') sehingga field2 di MRZ geser.
+# Ga perlu lengkap 100%, cukup cover negara asal turis yang umum booking.
+COUNTRY_CODES = {
+    "FRA", "ESP", "DEU", "GBR", "NLD", "ITA", "USA", "CHE", "BEL", "AUT",
+    "PRT", "SWE", "NOR", "DNK", "POL", "CZE", "IDN", "AUS", "CAN", "JPN",
+    "KOR", "CHN", "IND", "IRL", "FIN", "GRC", "HUN", "ROU", "BGR", "HRV",
+    "SVK", "SVN", "LTU", "LVA", "EST", "LUX", "MLT", "CYP", "ISR", "TUR",
+    "RUS", "UKR", "BRA", "MEX", "ARG", "CHL", "COL", "PER", "ZAF", "NZL",
+    "SGP", "MYS", "THA", "PHL", "VNM", "ARE", "SAU", "QAT", "EGY", "MAR",
+    "NGA", "KEN",
+}
+
+
+def find_nationality_anchor(line2: str):
+    """Cari posisi asli nationality (3 huruf kode negara) di line2. Kalau
+    OCR ngedrop beberapa karakter padding di field sebelumnya (biasanya
+    di sekitar passport number), posisi standar (index 10) jadi ga akurat
+    -- fungsi ini nyari ulang posisinya biar field2 setelahnya ke-realign."""
+    for i in range(3, 20):
+        window = line2[i:i + 3]
+        corrected = "".join(DIGIT_TO_LETTER.get(c, c) for c in window)
+        if corrected in COUNTRY_CODES:
+            return i
+    return None
+
+
 def parse_mrz(line1: str, line2: str) -> dict:
     line1 = (line1 + "<" * 44)[:44]
     line2 = (line2 + "<" * 44)[:44]
@@ -476,29 +511,40 @@ def parse_mrz(line1: str, line2: str) -> dict:
     name_field = line1[5:44]
     name_tokens = [t for t in re.split(r"<+", name_field) if t]
 
-    passport_number = line2[0:9].replace("<", "")
-    check1 = line2[9]
-    nat_raw = line2[10:13]
+    # coba posisi standar dulu (paling umum, kasus normal)
+    nat_pos = 10
+    nat_standard = "".join(DIGIT_TO_LETTER.get(c, c) for c in line2[10:13]).replace("<", "")
+    realigned = False
+
+    if nat_standard not in COUNTRY_CODES:
+        anchor = find_nationality_anchor(line2)
+        if anchor is not None and anchor != 10:
+            nat_pos = anchor
+            realigned = True
+
+    passport_number = line2[0:nat_pos - 1].replace("<", "")
+    check1 = force_numeric(line2[nat_pos - 1])
+    nat_raw = line2[nat_pos:nat_pos + 3]
     nationality = "".join(DIGIT_TO_LETTER.get(c, c) for c in nat_raw).replace("<", "").strip()
     nationality = nationality or "-"
-    dob_raw = line2[13:19]
-    check2 = line2[19]
-    sex_raw = line2[20]
-    expiry_raw = line2[21:27]
-    check3 = line2[27]
-    personal_number = line2[28:42].replace("<", "")
-    check4 = line2[42]
+    dob_raw = force_numeric(line2[nat_pos + 3:nat_pos + 9])
+    check2 = force_numeric(line2[nat_pos + 9]) if nat_pos + 9 < len(line2) else ""
+    sex_raw = line2[nat_pos + 10] if nat_pos + 10 < len(line2) else "<"
+    expiry_raw = force_numeric(line2[nat_pos + 11:nat_pos + 17])
+    check3 = force_numeric(line2[nat_pos + 17]) if nat_pos + 17 < len(line2) else ""
+    personal_number = line2[nat_pos + 18:nat_pos + 32].replace("<", "")
+    check4 = force_numeric(line2[nat_pos + 32]) if nat_pos + 32 < len(line2) else ""
 
     def valid(field, check):
         try:
-            return str(mrz_check_digit(field)) == check
+            return bool(check) and str(mrz_check_digit(field)) == check
         except Exception:
             return False
 
-    passport_ok = valid(line2[0:9], check1)
+    passport_ok = valid(line2[0:nat_pos - 1], check1)
     dob_ok = valid(dob_raw, check2)
     expiry_ok = valid(expiry_raw, check3)
-    personal_ok = valid(line2[28:42], check4) if personal_number else True
+    personal_ok = valid(line2[nat_pos + 18:nat_pos + 32], check4) if personal_number else True
 
     sex = {"M": "M", "F": "F"}.get(sex_raw, f"{sex_raw} (ga jelas, cek manual)")
 
@@ -522,6 +568,7 @@ def parse_mrz(line1: str, line2: str) -> dict:
         "expiry": _mrz_date(expiry_raw, is_expiry=True),
         "expiry_valid": expiry_ok,
         "personal_number": personal_number,
+        "realigned": realigned,
         "personal_number_valid": personal_ok,
         "raw_line1": line1,
         "raw_line2": line2,
@@ -724,6 +771,8 @@ if passport_imgs:
                 confidence = "MRZ (checksum valid)" if (
                     result["passport_number_valid"] and result["dob_valid"]
                 ) else "MRZ (checksum GAGAL sebagian, cek manual)"
+                if result.get("realigned"):
+                    confidence += " -- posisi field di-realign otomatis (OCR sempat kehilangan beberapa karakter), ekstra hati-hati cek manual"
             else:
                 result = extract_from_printed_text(ocr_text)
                 name_display = " ".join(result["name_tokens_raw"]) if result["name_tokens_raw"] else "-"
