@@ -433,8 +433,48 @@ LETTER_TO_DIGIT = {"O": "0", "Q": "0", "I": "1", "L": "1", "S": "5", "B": "8", "
 def force_numeric(s: str) -> str:
     """Field MRZ tertentu (tanggal, check digit) HARUS angka semua sesuai
     spec. Kalau ada huruf nyempil di situ, itu pasti salah baca OCR, bukan
-    isi yang ambigu -- jadi aman dikoreksi otomatis."""
+    isi yang ambigu -- jadi aman dikoreksi otomatis (best-guess pertama)."""
     return "".join(LETTER_TO_DIGIT.get(c, c) for c in s)
+
+
+# Beberapa huruf itu ambigu, bisa mewakili lebih dari 1 angka tergantung
+# font/kualitas foto (misal 'I' bisa kebaca dari '1', '7', atau '9').
+AMBIGUOUS_DIGIT_ALTERNATIVES = {
+    "O": ["0"], "Q": ["0"], "D": ["0"],
+    "I": ["1", "7", "9"], "L": ["1"], "T": ["7"],
+    "S": ["5", "8"], "B": ["8"],
+    "Z": ["2"], "G": ["6", "9"], "A": ["4"], "E": ["3", "8"],
+}
+
+
+def resolve_numeric_field(raw: str, check_char: str):
+    """Field numerik yang ada checksum-nya (DOB/expiry): kalau koreksi
+    default gagal validasi, coba beberapa kombinasi alternatif angka buat
+    huruf yang ambigu, pakai checksum buat milih yang paling mungkin bener
+    -- bukan cuma nebak satu kemungkinan doang."""
+    if not check_char.isdigit():
+        return force_numeric(raw), False
+
+    target = int(check_char)
+    default_guess = force_numeric(raw)
+    if default_guess.isdigit() and mrz_check_digit(default_guess) == target:
+        return default_guess, True
+
+    ambiguous_positions = [i for i, c in enumerate(raw) if c in AMBIGUOUS_DIGIT_ALTERNATIVES]
+    if not ambiguous_positions or len(ambiguous_positions) > 3:
+        return default_guess, False
+
+    from itertools import product
+    option_lists = [AMBIGUOUS_DIGIT_ALTERNATIVES[raw[i]] for i in ambiguous_positions]
+    for combo in product(*option_lists):
+        candidate = list(default_guess)
+        for pos, val in zip(ambiguous_positions, combo):
+            candidate[pos] = val
+        candidate = "".join(candidate)
+        if candidate.isdigit() and mrz_check_digit(candidate) == target:
+            return candidate, True
+
+    return default_guess, False
 
 
 def _mrz_char_value(c: str) -> int:
@@ -509,7 +549,7 @@ def parse_mrz(line1: str, line2: str) -> dict:
     country = line1[2:5].replace("<", "")
 
     name_field = line1[5:44]
-    name_tokens = [t for t in re.split(r"<+", name_field) if t]
+    name_tokens = [t for t in re.split(r"<+", name_field) if t and not t.isdigit()]
 
     # coba posisi standar dulu (paling umum, kasus normal)
     nat_pos = 10
@@ -527,11 +567,11 @@ def parse_mrz(line1: str, line2: str) -> dict:
     nat_raw = line2[nat_pos:nat_pos + 3]
     nationality = "".join(DIGIT_TO_LETTER.get(c, c) for c in nat_raw).replace("<", "").strip()
     nationality = nationality or "-"
-    dob_raw = force_numeric(line2[nat_pos + 3:nat_pos + 9])
     check2 = force_numeric(line2[nat_pos + 9]) if nat_pos + 9 < len(line2) else ""
+    dob_raw, dob_ok = resolve_numeric_field(line2[nat_pos + 3:nat_pos + 9], check2)
     sex_raw = line2[nat_pos + 10] if nat_pos + 10 < len(line2) else "<"
-    expiry_raw = force_numeric(line2[nat_pos + 11:nat_pos + 17])
     check3 = force_numeric(line2[nat_pos + 17]) if nat_pos + 17 < len(line2) else ""
+    expiry_raw, expiry_ok = resolve_numeric_field(line2[nat_pos + 11:nat_pos + 17], check3)
     personal_number = line2[nat_pos + 18:nat_pos + 32].replace("<", "")
     check4 = force_numeric(line2[nat_pos + 32]) if nat_pos + 32 < len(line2) else ""
 
@@ -542,8 +582,6 @@ def parse_mrz(line1: str, line2: str) -> dict:
             return False
 
     passport_ok = valid(line2[0:nat_pos - 1], check1)
-    dob_ok = valid(dob_raw, check2)
-    expiry_ok = valid(expiry_raw, check3)
     personal_ok = valid(line2[nat_pos + 18:nat_pos + 32], check4) if personal_number else True
 
     sex = {"M": "M", "F": "F"}.get(sex_raw, f"{sex_raw} (ga jelas, cek manual)")
