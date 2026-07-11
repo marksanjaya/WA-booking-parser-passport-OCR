@@ -495,24 +495,49 @@ def mrz_check_digit(s: str) -> int:
     return total % 10
 
 
+def _clean_mrz_line(raw: str) -> str:
+    cleaned = raw.upper().replace(" ", "")
+    for bad, good in MRZ_CHAR_FIX.items():
+        cleaned = cleaned.replace(bad, good)
+    return re.sub(r"[^A-Z0-9<]", "", cleaned)
+
+
 def find_mrz_lines(ocr_text: str):
-    """Cari 2 baris MRZ (44 karakter, isinya huruf/angka/'<') dari hasil OCR."""
-    candidates = []
-    for raw in ocr_text.splitlines():
-        cleaned = raw.upper().replace(" ", "")
-        for bad, good in MRZ_CHAR_FIX.items():
-            cleaned = cleaned.replace(bad, good)
-        cleaned = re.sub(r"[^A-Z0-9<]", "", cleaned)
-        if 30 <= len(cleaned) <= 46 and cleaned.count("<") >= 2:
-            candidates.append(cleaned)
+    """Cari 2 baris MRZ dari hasil OCR. Coba cara cepat dulu (baris yang
+    emang udah bersih & pas panjangnya, kasus paling umum). Kalau gagal,
+    fallback ke nyari pola MRZ sebagai SUBSTRING di dalam baris yang
+    nyempil bareng noise lain (misal teks watermark ke-OCR nempel di
+    baris yang sama, sering kejadian di foto yang rame elemen visualnya)."""
+    candidates = [_clean_mrz_line(raw) for raw in ocr_text.splitlines()]
+    candidates = [c for c in candidates if 30 <= len(c) <= 46 and c.count("<") >= 2]
 
     line1 = next((c for c in candidates if c.startswith("P")), None)
-    if not line1:
-        return None
-    idx = candidates.index(line1)
-    if idx + 1 >= len(candidates):
-        return None
-    return line1, candidates[idx + 1]
+    if line1:
+        idx = candidates.index(line1)
+        if idx + 1 < len(candidates):
+            return line1, candidates[idx + 1]
+
+    line1_found = None
+    line2_found = None
+    for raw in ocr_text.splitlines():
+        cleaned = _clean_mrz_line(raw)
+        if len(cleaned) < 25:
+            continue
+        if line1_found is None:
+            m = re.search(r"[A-Z<]{28,46}", cleaned)  # line1: huruf+'<' doang, TANPA digit
+            if m and m.group(0).count("<") >= 3:
+                line1_found = m.group(0)
+        if line2_found is None:
+            for m in re.finditer(r"[A-Z0-9<]{28,46}", cleaned):
+                s = m.group(0)
+                if sum(c.isdigit() for c in s) >= 8 and s.count("<") >= 3:
+                    line2_found = s
+                    break
+
+    if line1_found and line2_found:
+        return line1_found, line2_found
+
+    return None
 
 
 # Kode negara (ISO 3166-1 alpha-3) buat deteksi ulang posisi field kalau
@@ -551,7 +576,7 @@ def is_noise_token(t: str) -> bool:
         return False
     from collections import Counter
     most_common_count = Counter(t).most_common(1)[0][1]
-    return most_common_count / len(t) > 0.5
+    return most_common_count / len(t) >= 0.5
 
 
 def parse_mrz(line1: str, line2: str) -> dict:
